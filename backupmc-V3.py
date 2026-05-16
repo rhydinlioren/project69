@@ -6,6 +6,7 @@ import zipfile
 import json
 import time
 from datetime import datetime
+import hashlib
 
 # Auto-install dependencies
 def install_package(package):
@@ -26,6 +27,19 @@ from botocore.exceptions import ClientError
 from colorama import init, Fore, Style
 
 init(autoreset=True)
+
+# Header
+ASCII_HEADER = """
+░█▀▄░█▀█░█▀▀░█░█░█░█░█▀█░█▄█░█▀▀░░░█░█░▀▀█
+░█▀▄░█▀█░█░░░█▀▄░█░█░█▀▀░█░█░█░░░░░▀▄▀░░▀▄
+░▀▀░░▀░▀░▀▀▀░▀░▀░▀▀▀░▀░░░▀░▀░▀▀▀░░░░▀░░▀▀░
+"""
+
+def print_header(subtitle=""):
+    print(f"{Fore.WHITE}{ASCII_HEADER}{Style.DIM}")
+    if subtitle:
+        print(f"{Fore.YELLOW}  {subtitle}")
+    print()
 
 # Paths 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -106,7 +120,7 @@ def get_credentials():
         return key_id, app_key
 
     clear_screen()
-    print_gradient_text("BACKUPMC V3 - CREDENTIALS SETUP")
+    print_header("Initial Setup")
     print(f"{Fore.CYAN}Enter your Backblaze B2 credentials.")
     print(f"{Fore.CYAN}These will be kept in environment variables or optional .env file.\n")
 
@@ -144,7 +158,7 @@ def s3():
 def first_time_bucket_setup():
     global BUCKET_NAME, ENDPOINT
     clear_screen()
-    print_gradient_text("BACKUPMC V3 - BUCKET SETUP")
+    print_header("Bucket Setup")
     BUCKET_NAME = input(f"{Fore.YELLOW}Enter B2 Bucket Name: {Style.RESET_ALL}").strip()
     ENDPOINT = input(f"{Fore.YELLOW}Enter B2 S3 Endpoint (e.g. https://s3.us-east-005.backblazeb2.com): {Style.RESET_ALL}").strip()
 
@@ -157,7 +171,7 @@ def first_time_bucket_setup():
 def first_time_folder_setup():
     global SERVER_FOLDER_PATH
     clear_screen()
-    print_gradient_text("BACKUPMC V3 - FIRST-TIME SETUP")
+    print_header("Folder Setup")
     print(f"{Fore.CYAN}1. Use THIS DIRECTORY (where the script is located)")
     print(f"{Fore.CYAN}2. Select a custom directory")
     choice = input(f"{Fore.YELLOW}Enter your choice: {Style.RESET_ALL}").strip()
@@ -191,30 +205,67 @@ if not BUCKET_NAME or not ENDPOINT:
 
 class ProgressCallback:
     def __init__(self, file_name, file_size):
-        self.file_name = file_name
-        self.file_size = file_size
-        self.uploaded  = 0
+        self.file_name  = file_name
+        self.file_size  = file_size
+        self.uploaded   = 0
+        self.start_time = time.time()
+        self.last_speed_str = ""
 
     def __call__(self, bytes_amount):
         self.uploaded += bytes_amount
-        pct = int(self.uploaded / self.file_size * 100) if self.file_size else 100
-        print(f'\rUploading {self.file_name}: {pct}%', end='')
+        elapsed = time.time() - self.start_time
+        speed   = self.uploaded / elapsed if elapsed > 0 else 0
+        pct     = int(self.uploaded / self.file_size * 100) if self.file_size else 100
+
+        if speed >= 1_048_576:
+            speed_str = f"{speed / 1_048_576:.1f} MB/s"
+        else:
+            speed_str = f"{speed / 1024:.1f} KB/s"
+
+        self.last_speed_str = speed_str
+        print(f'\r  {self.file_name}: {pct}% — {speed_str}', end='', flush=True)
+        
+def format_size(size_bytes):
+    if size_bytes >= 1_073_741_824:
+        return f"{size_bytes / 1_073_741_824:.2f} GB"
+    elif size_bytes >= 1_048_576:
+        return f"{size_bytes / 1_048_576:.2f} MB"
+    return f"{size_bytes / 1024:.2f} KB"
+
+def md5_of_file(file_path):
+    hash_md5 = hashlib.md5()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 def upload_to_b2(file_path, object_key):
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path)
     try:
+        local_md5 = md5_of_file(file_path)
         callback = ProgressCallback(file_name, file_size)
         s3().upload_file(file_path, BUCKET_NAME, object_key, Callback=callback)
-        print(f"\r{Fore.CYAN}Upload of {file_name} completed successfully.        ")
-    except ClientError as e:
-        print(f"\r{Fore.RED}Error uploading {file_name}: {e}")
 
-def upload_directory_to_b2(local_directory, prefix):
-    for fname in os.listdir(local_directory):
-        fpath = os.path.join(local_directory, fname)
-        if os.path.isfile(fpath):
-            upload_to_b2(fpath, f'{prefix}/{fname}')
+        response = s3().head_object(Bucket=BUCKET_NAME, Key=object_key)
+        remote_md5 = response['ETag'].strip('"')
+
+        speed = callback.last_speed_str
+        if '-' in remote_md5:
+            remote_size = response['ContentLength']
+            if remote_size == file_size:
+                print(f"\r{Fore.WHITE}  {file_name}: 100% — {speed} {Fore.GREEN}— verified ✓ (md5)")
+            else:
+                print(f"\r{Fore.WHITE}  {file_name}: 100% — {speed} {Fore.RED}— SIZE MISMATCH!")
+        else:
+            if local_md5 == remote_md5:
+                print(f"\r{Fore.WHITE}  {file_name}: 100% — {speed} {Fore.GREEN}— verified ✓ (md5)")
+            else:
+                print(f"\r{Fore.WHITE}  {file_name}: 100% — {speed} {Fore.RED}— CHECKSUM MISMATCH!")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
 
 # List / Download / Delete 
 def list_backup_folders():
@@ -287,7 +338,7 @@ def delete_all_versions_for_prefix(prefix):
             for err in errors:
                 print(f"  - {err.get('Key')} ({err.get('VersionId')}): {err.get('Code')} {err.get('Message')}")
         else:
-            print(f"{Fore.GREEN}Deleted {len(chunk)} version(s).")
+            print(f"{Fore.YELLOW}Deleted {len(chunk)} version(s).")
 
 # Zip helpers 
 def zip_folder(folder_path, zip_path):
@@ -362,15 +413,20 @@ def enforce_max_backups():
     for folder, _ in to_delete:
         delete_all_versions_for_prefix(f"backups/{folder}/")
 
+# Timezone
+def get_timezone_abbr():
+    return time.tzname[1] if time.daylight else time.tzname[0]
+
 # Main actions 
 def start_backup():
     clear_screen()
-    print_gradient_text("BACKUPMC V3")
+    print_header()
     print(f"{Fore.CYAN}Starting backup process...")
 
     os.makedirs(TEMP_BACKUP_PATH, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{get_timezone_abbr()}"
     backup_prefix = f"backups/{timestamp}"
+    backup_start = time.time()
 
     try:
         for world_folder in WORLD_FOLDERS:
@@ -389,11 +445,19 @@ def start_backup():
             zip_additional_files(ADDITIONAL_FILES, add_zip)
             print("Zipped additional files")
 
-        print("Uploading to Backblaze B2...")
-        upload_directory_to_b2(TEMP_BACKUP_PATH, backup_prefix)
+        print(f"{Fore.CYAN}Uploading to Backblaze B2...")
+        total_size = 0
+        for fname in os.listdir(TEMP_BACKUP_PATH):
+            fpath = os.path.join(TEMP_BACKUP_PATH, fname)
+            if os.path.isfile(fpath):
+                total_size += os.path.getsize(fpath)
+                upload_to_b2(fpath, f'{backup_prefix}/{fname}')
+
+        print(f"{Fore.CYAN}Total uploaded: {format_size(total_size)}")
 
         enforce_max_backups()
-        print(f"{Fore.GREEN}Backup completed successfully!")
+        elapsed = time.time() - backup_start
+        print(f"{Fore.GREEN}Backup completed in {elapsed:.1f}s")
 
     except Exception as e:
         print(f"{Fore.RED}Backup failed: {e}")
@@ -403,11 +467,39 @@ def start_backup():
         shutil.rmtree(TEMP_BACKUP_PATH, ignore_errors=True)
         input("Press Enter to return to the main menu...")
 
+def list_backups():
+    clear_screen()
+    print_header("List Backups")
+    print()
+    folders = list_backup_folders()
+    if not folders:
+        print(f"{Fore.RED}No backups found.")
+        input("\nPress Enter to return to the main menu...")
+        return
+
+    total_all = 0
+    for folder in folders:
+        files = list_backup_files_in_folder(folder)
+        folder_size = 0
+        for key in files:
+            obj = s3().head_object(Bucket=BUCKET_NAME, Key=key)
+            folder_size += obj['ContentLength']
+        total_all += folder_size
+        print(f"{Fore.CYAN}{folder}  {Fore.YELLOW}{format_size(folder_size)}")
+        for key in files:
+            obj = s3().head_object(Bucket=BUCKET_NAME, Key=key)
+            print(f"  {Fore.BLUE}• {os.path.basename(key)}  {Fore.WHITE}{format_size(obj['ContentLength'])}")
+        print()
+
+    print(f"{Fore.CYAN}{'─' * 40}")
+    print(f"{Fore.CYAN}Total used: {Fore.YELLOW}{format_size(total_all)}")
+    input(f"\n{Fore.YELLOW}Press Enter to return to the main menu...")
+
 def restore_backup():
     while True:
         try:
             clear_screen()
-            print_gradient_text("BACKUPMC V3 - RESTORE")
+            print_header("Restore Backup")
             folders = list_backup_folders()
 
             if not folders:
@@ -499,7 +591,7 @@ def restore_backup():
 def delete_backups():
     try:
         clear_screen()
-        print_gradient_text("BACKUPMC V3 - DELETE BACKUPS")
+        print_header("Delete Backup")
 
         folders = list_backup_folders()
         if not folders:
@@ -565,7 +657,7 @@ def delete_backups():
 def manage_settings():
     while True:
         clear_screen()
-        print_gradient_text("BACKUPMC V3 - MANAGE SETTINGS")
+        print_header("Manage Settings")
         print(f"{Fore.CYAN}1. Add/Remove Folder/Files (to backup)")
         print(f"{Fore.CYAN}2. Change B2 Credentials (env/.env)")
         print(f"{Fore.CYAN}3. Change Server Directory") 
@@ -634,11 +726,12 @@ def manage_settings():
 def main_menu():
     while True:
         clear_screen()
-        print_gradient_text("BACKUPMC V3")
+        print_header()
         print(f"{Fore.CYAN}1. Start Backup")
         print(f"{Fore.CYAN}2. Restore Backups")
         print(f"{Fore.CYAN}3. Delete Backups")
         print(f"{Fore.CYAN}4. Manage Settings")
+        print(f"{Fore.CYAN}5. List Backups")
         print(f"{Fore.CYAN}x. Exit")
 
         choice = input(f"{Fore.YELLOW}Enter your choice: {Style.RESET_ALL}").strip()
@@ -651,6 +744,8 @@ def main_menu():
             delete_backups()
         elif choice == '4':
             manage_settings()
+        elif choice == '5':
+            list_backups()
         elif choice.lower() == 'x':
             clear_screen()
             print(f"{Fore.GREEN}Goodbye!")
@@ -677,6 +772,8 @@ if __name__ == '__main__':
             delete_backups()
         elif command == "4":
             manage_settings()
+        elif command == "5":
+            list_backups()
         elif command.lower() == "x":
             clear_screen()
             print(f"{Fore.GREEN}Goodbye!")
@@ -684,7 +781,7 @@ if __name__ == '__main__':
             sys.exit(0)
         else:
             print(f"{Fore.RED}Invalid argument.")
-            print(f"{Fore.CYAN}Options: 1 (Backup)  2 (Restore)  3 (Delete)  4 (Settings)  x (Exit)")
+            print(f"{Fore.CYAN}Options: 1 (Backup)  2 (Restore)  3 (Delete)  4 (Settings)  5 (List Backups) x (Exit)")
             sys.exit(1)
     else:
         main_menu()
