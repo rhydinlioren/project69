@@ -172,29 +172,36 @@ def first_time_folder_setup():
     global SERVER_FOLDER_PATH
     clear_screen()
     print_header("Folder Setup")
-    print(f"{Fore.CYAN}1. Use THIS DIRECTORY (where the script is located)")
+
+    detected = os.path.join(BASE_DIR, "minecraft_server")
+
+    print(f"{Fore.CYAN}1. Use detected directory: {detected}")
     print(f"{Fore.CYAN}2. Select a custom directory")
     choice = input(f"{Fore.YELLOW}Enter your choice: {Style.RESET_ALL}").strip()
 
     if choice == '1':
-        SERVER_FOLDER_PATH = BASE_DIR
-        print(f"{Fore.GREEN}Using THIS directory: {SERVER_FOLDER_PATH}")
-    elif choice == '2':
-        custom_folder = input(f"{Fore.YELLOW}Enter the full path to the directory: {Style.RESET_ALL}").strip()
+        if not os.path.isdir(detected):
+            print(f"{Fore.RED}minecraft_server/ not found next to script. Please enter path manually.")
+            choice = '2'
+        else:
+            SERVER_FOLDER_PATH = detected
+            print(f"{Fore.GREEN}Using: {SERVER_FOLDER_PATH}")
+
+    if choice == '2':
+        custom_folder = input(f"{Fore.YELLOW}Enter the full path to the directory: {Style.RESET_ALL}").strip().rstrip("/")
         if os.path.isdir(custom_folder):
             SERVER_FOLDER_PATH = custom_folder
             print(f"{Fore.GREEN}Using custom directory: {SERVER_FOLDER_PATH}")
         else:
-            print(f"{Fore.RED}Invalid path! Using THIS directory.")
-            SERVER_FOLDER_PATH = BASE_DIR
-    else:
-        print(f"{Fore.RED}Invalid choice. Using THIS directory.")
-        SERVER_FOLDER_PATH = BASE_DIR
+            print(f"{Fore.RED}Invalid path! Falling back to detected: {detected}")
+            SERVER_FOLDER_PATH = detected
+    elif choice not in ('1', '2'):
+        print(f"{Fore.RED}Invalid choice. Using detected: {detected}")
+        SERVER_FOLDER_PATH = detected
 
     settings['SERVER_FOLDER_PATH'] = SERVER_FOLDER_PATH
     _save_settings()
     time.sleep(2)
-
 # Checkups
 if not SERVER_FOLDER_PATH:
     first_time_folder_setup()
