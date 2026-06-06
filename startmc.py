@@ -1,28 +1,24 @@
+#!/usr/bin/env python3
 import os
 import subprocess
+import glob
 
-# Set your RAM limit (e.g. 2G, 512M, etc.)
-RAM = "2G"
+RAM = "8G"
 
-# Server setup
-server_dir = "/workspaces/githubusername/minecraft_server/"
-jar_file = "paper.jar"
-jar_path = os.path.join(server_dir, jar_file)
+BASE = os.path.dirname(os.path.abspath(__file__))
+server_dir = os.path.join(BASE, "minecraft_server")
+
+jars = glob.glob(os.path.join(server_dir, "*.jar"))
+if not jars:
+    print(f"No jar found in {server_dir}")
+    exit(1)
+
+jar_path = jars[0]
 eula_path = os.path.join(server_dir, "eula.txt")
 
-# Accept EULA
 if not os.path.exists(eula_path) or "eula=true" not in open(eula_path).read():
     with open(eula_path, "w") as f:
         f.write("eula=true\n")
-    print("EULA accepted.")
 
-# Start the server
-print(f"Starting server with RAM={RAM}")
-subprocess.run([
-    "java",
-    f"-Xms{RAM}",
-    f"-Xmx{RAM}",
-    "-jar",
-    jar_path,
-    "nogui"
-], cwd=server_dir)
+print(f"Starting {os.path.basename(jar_path)} with {RAM} RAM...")
+subprocess.run(["java", f"-Xms{RAM}", f"-Xmx{RAM}", "-jar", jar_path, "nogui"], cwd=server_dir)
