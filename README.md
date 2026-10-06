@@ -1,2 +1,2 @@
 # Project 69
-> Template Repo to fork into other accounts...
+> Work in progress project, I haven't really decided much on what to name it properly.
